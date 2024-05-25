@@ -176,6 +176,7 @@ pub struct ProgramHeaderTableEntry {
     flag_readable: bool,
     flag_wirtable: bool,
     flag_executable: bool,
+    flag_value : u32,
 
     offset: u64,
     virtual_address: u64,
@@ -204,6 +205,7 @@ pub fn decode_buffer_to_program_header_table_entry(buffer: &[u8]) -> Option<Prog
     let flag_readable = (u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) & 0x1) != 0;
     let flag_wirtable = (u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) & 0x2) != 0;
     let flag_executable = (u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]) & 0x4) != 0;
+    let flag_value = u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
     let offset = u64::from_le_bytes([
         buffer[8], buffer[9], buffer[10], buffer[11],
         buffer[12], buffer[13], buffer[14], buffer[15],
@@ -233,6 +235,7 @@ pub fn decode_buffer_to_program_header_table_entry(buffer: &[u8]) -> Option<Prog
         flag_readable,
         flag_wirtable,
         flag_executable,
+        flag_value,
         offset,
         virtual_address,
         physical_address,
@@ -276,7 +279,6 @@ pub struct SectionHeaderTableEntry {
     // "lobits user", "hibits user"
     section_type: String,
 
-
     flag_write: bool,
     flag_allocation: bool,
     flag_executable_instructions: bool,
@@ -316,7 +318,7 @@ pub fn decode_buffer_to_section_header_table_entry(buffer: &[u8]) -> Option<Sect
     let flag_write = (u64::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]]) & 0x1) != 0;
     let flag_allocation = (u64::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]]) & 0x2) != 0;
     let flag_executable_instructions = (u64::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]]) & 0x4) != 0;
-    let flag_processor_specific = u64::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]]) & 0xfffffff8;
+    let flag_processor_specific = u64::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]]);
     let address = u64::from_le_bytes([
         buffer[16], buffer[17], buffer[18], buffer[19],
         buffer[20], buffer[21], buffer[22], buffer[23],
@@ -380,6 +382,50 @@ pub fn decode_buffer_to_section_header_table(buffer: &[u8], entry_size: u16, ent
 }
 
 #[derive(Debug)]
+pub struct StringTable {
+    strings: Vec<String>,
+}
+
+pub fn decode_buffer_to_string_table(buffer: &[u8]) -> Option<StringTable> {
+    // the first & last strings are "\0"
+    // all strings are null-ended
+    let mut strings = Vec::new();
+
+    let mut i = 0;
+    if buffer.len() == 0 {
+        return None;
+    }
+    if buffer[i] != 0u8 {
+        return None;
+    }
+    i += 1;
+    strings.push(String::from(""));
+    
+    while i < buffer.len() {
+        let mut string = String::from("");
+
+        while i < buffer.len() && buffer[i] != 0u8 {
+            string.push(buffer[i] as char);
+            i += 1;
+        }
+        strings.push(string.clone());
+        if string == "" {
+            break;
+        } else {
+            i += 1;
+        }
+    }
+
+    if i == buffer.len() {
+        return None;
+    }
+
+    Some(StringTable {
+        strings,
+    })
+}
+
+#[derive(Debug)]
 pub struct Elf64 {
     // elf header
     elf_header: ElfHeader,
@@ -389,15 +435,26 @@ pub struct Elf64 {
 
     // section header table
     section_header_table: SectionHeaderTable,
+
+    // section name string table
+    string_table: StringTable,
 }
 
 pub fn decode_buffer_to_elf64(buffer: &[u8]) -> Option<Elf64> {
     let elf_header = decode_buffer_to_elfheader(&buffer)?;
     let program_header_table = decode_buffer_to_program_header_table(&buffer[(elf_header.program_header_table_file_offset as usize)..], elf_header.program_header_table_entry_size, elf_header.program_header_table_entry_number)?;
     let section_header_table = decode_buffer_to_section_header_table(&buffer[(elf_header.section_header_table_file_offset as usize)..], elf_header.section_header_table_entry_size, elf_header.section_header_table_entry_number)?;
+    
+    // TODO: index may be SHN_UNDEF or SHN_XINDEX 
+    let index = elf_header.section_header_table_string_table_index as usize;
+    let offset = section_header_table.entries[index].offset as usize;
+
+    let string_table = decode_buffer_to_string_table(&buffer[(offset as usize)..])?;
     Some(Elf64 {
         elf_header,
         program_header_table,
         section_header_table,
+        string_table,
     })
 }
+
